@@ -101,10 +101,6 @@ a.card:focus-visible {
   outline-offset: 3px;
 }
 
-.card-pending {
-  opacity: 0.62;
-}
-
 .card-icon {
   font-size: 1.5rem;
   line-height: 1.2;
@@ -129,17 +125,6 @@ a.card:focus-visible {
   margin-top: 0.3rem;
   color: var(--muted);
   font-size: 0.94rem;
-}
-
-.badge {
-  padding: 0.1rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  font-size: 0.7rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--muted);
 }
 
 .card-cue {
