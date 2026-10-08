@@ -9,7 +9,7 @@ Personal GitHub Pages site.
 | `/` | Static landing page (`index.html` + `assets/styles.css`) served from this repository. |
 | `/kingshot/map/` | The Kingshot player map, mirrored from another repository's published site at deploy time. |
 | `/kingshot/troop-calculator/` | The bear troop calculator, mirrored the same way. |
-| `/kingshot/bear/` | Reserved for a future bear trap damage input tool. Not published yet, so the landing page marks it "Coming soon" rather than linking to it. |
+| Bear trap logger card | Links directly to the live bear trap logger at [`roberthewitt.github.io/kingshot-discord-updates/bear/`](https://roberthewitt.github.io/kingshot-discord-updates/bear/), rather than being mirrored into this site. |
 
 ## How the tools are sourced
 
@@ -193,8 +193,15 @@ That needs `build` to declare the output:
       build_id: ${{ steps.buildid.outputs.build_id }}
 ```
 
-## Adding `/kingshot/bear/`
+## Why the bear trap logger isn't mirrored
 
-Add the page under `kingshot/bear/` in this repository (or extend the workflow to
-build it from elsewhere) and turn the disabled card in `index.html` into a real
-link.
+Unlike the map and the calculator, the landing page's "Bear trap logger" card
+links straight to
+[`roberthewitt.github.io/kingshot-discord-updates/bear/`](https://roberthewitt.github.io/kingshot-discord-updates/bear/)
+instead of being copied into `_site` by `deploy-pages.yml`. That page shares a
+single `assets/` directory with the map at the root of its own Pages site
+(it references `../assets/...`), rather than owning a self-contained bundle
+the way the map does with `base: './'`. Mirroring it would mean also mirroring
+and rewriting that shared asset directory, which the workflow does not do
+today. Linking straight to the source avoids that, at the cost of navigating
+away from this site instead of staying nested under `/kingshot/`.
