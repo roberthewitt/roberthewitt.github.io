@@ -1,10 +1,11 @@
 name: Deploy Site
 
 # The root site is static, so it only needs rebuilding when this repository
-# changes. The nested Kingshot map is pulled from
-# roberthewitt/kingshot-discord-updates and rebuilt on the same daily cadence
-# as that repository's own publish workflow (05:30 UTC), staggered slightly so
-# the two do not race for the same roster commit.
+# changes. The nested Kingshot map is mirrored from the site that
+# roberthewitt/kingshot-discord-updates already publishes, on the same daily
+# cadence as that repository's own publish workflow (05:30 UTC), staggered
+# slightly so this run picks up that day's roster rather than the previous
+# one.
 on:
   push:
     branches:
@@ -24,6 +25,11 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
+env:
+  # The map's own public Pages site, which is the published output of
+  # `npm run map:build` in roberthewitt/kingshot-discord-updates.
+  MAP_SOURCE_URL: https://roberthewitt.github.io/kingshot-discord-updates/
+
 jobs:
   build:
     name: Build Site
@@ -31,49 +37,75 @@ jobs:
     steps:
       - name: Checkout Site Repository
         uses: actions/checkout@v4
-        with:
-          path: site
 
-      # Read-only checkout of the public source repository. Nothing is written
-      # back to it; it is only used to produce the map bundle.
-      - name: Checkout Kingshot Map Source
-        uses: actions/checkout@v4
-        with:
-          repository: roberthewitt/kingshot-discord-updates
-          path: kingshot-source
+      # The map is copied from its published site rather than rebuilt from
+      # source. Its repository is private, so this workflow's GITHUB_TOKEN
+      # cannot check it out, and a cross-repository PAT would add a secret
+      # that silently expires. The published bundle is already public, so
+      # mirroring it needs no credential at all and can only ever serve what
+      # the source repository itself chose to publish.
+      #
+      # The bundle is built by vite with `base: './'`, so every reference in
+      # it is relative and keeps resolving once it is served from
+      # /kingshot/map/ instead of the site root.
+      - name: Mirror Kingshot Map
+        run: |
+          set -euo pipefail
 
-      - name: Setup Node.js Environment
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: npm
-          cache-dependency-path: kingshot-source/package-lock.json
+          dest="_site/kingshot/map"
+          mkdir -p "${dest}"
 
-      - name: Install Map Dependencies
-        working-directory: kingshot-source
-        run: npm ci
+          curl -fsSL --retry 3 --retry-delay 5 -o "${dest}/index.html" "${MAP_SOURCE_URL}"
 
-      # `premap:build` regenerates web/public/players.json from the checked-in
-      # roster before vite bundles the site. No API key is required.
-      - name: Build Kingshot Map
-        working-directory: kingshot-source
-        run: npm run map:build
+          # Discover the hashed asset filenames instead of hardcoding them,
+          # since they change on every rebuild of the map.
+          grep -oE '(src|href)="\./[^"]+"' "${dest}/index.html" \
+            | sed -E 's/.*"\.\/([^"]+)"/\1/' \
+            | sort -u > assets.txt
 
-      # The map is built with vite `base: './'`, so its asset references are
-      # relative and keep working once the bundle is moved under /kingshot/map/.
+          if [[ ! -s assets.txt ]]; then
+            echo "Found no relative assets in the published map, so it was probably an error page" >&2
+            exit 1
+          fi
+
+          while read -r asset; do
+            mkdir -p "${dest}/$(dirname "${asset}")"
+            curl -fsSL --retry 3 --retry-delay 5 -o "${dest}/${asset}" "${MAP_SOURCE_URL}${asset}"
+          done < assets.txt
+
+          # Fetched separately because the map requests it at runtime rather
+          # than referencing it from the markup.
+          curl -fsSL --retry 3 --retry-delay 5 -o "${dest}/players.json" "${MAP_SOURCE_URL}players.json"
+
+          while read -r asset; do
+            if [[ ! -s "${dest}/${asset}" ]]; then
+              echo "Mirrored ${asset} is missing or empty" >&2
+              exit 1
+            fi
+          done < <(cat assets.txt; printf 'players.json\nindex.html\n')
+
+          rm assets.txt
+
+          # A map that renders with no players is a silent failure, so treat
+          # an unusable dataset as a failed build.
+          player_count="$(node -p "require('./${dest}/players.json').players.length")"
+          if [[ "${player_count}" -eq 0 ]]; then
+            echo "The mirrored dataset contains no players" >&2
+            exit 1
+          fi
+
+          dataset_version="$(node -p "require('./${dest}/players.json').version?.label ?? 'unknown'")"
+          echo "Mirrored map: ${player_count} players (\`${dataset_version}\`)." | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Assemble Pages Artifact
         run: |
           set -euo pipefail
 
-          if [[ ! -f kingshot-source/dist/player-map/index.html ]]; then
-            echo "Expected the map build to produce dist/player-map/index.html" >&2
-            exit 1
-          fi
-
-          mkdir -p _site
-          rsync -a --exclude '.git' --exclude '.github' site/ _site/
-          mkdir -p _site/kingshot/map
-          rsync -a kingshot-source/dist/player-map/ _site/kingshot/map/
+          rsync -a \
+            --exclude '.git' \
+            --exclude '.github' \
+            --exclude '_site' \
+            ./ _site/
           touch _site/.nojekyll
 
           for required in _site/index.html _site/assets/styles.css _site/kingshot/map/index.html; do
@@ -83,13 +115,14 @@ jobs:
             fi
           done
 
-          if grep -q 'src="/' _site/kingshot/map/index.html; then
-            echo "The map bundle references absolute asset paths and will break under /kingshot/map/" >&2
+          # Absolute references would resolve against the site root and break
+          # the map now that it is served from a nested path.
+          if grep -qE '(src|href)="/' _site/kingshot/map/index.html; then
+            echo "The map bundle references absolute paths and will break under /kingshot/map/" >&2
             exit 1
           fi
 
-          echo "**Assembled site**" | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "Root page plus the Kingshot map at \`kingshot/map/\`." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "Assembled root page plus the Kingshot map at \`kingshot/map/\`." | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
