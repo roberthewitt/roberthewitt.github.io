@@ -9,8 +9,10 @@
       content="Small tools and dashboards, including the Kingshot player map, bear troop calculator and bear trap logger."
     />
     <link rel="stylesheet" href="assets/styles.css" />
+    <script type="module" src="/assets/tool-navigation.js"></script>
   </head>
   <body>
+    <tool-navigation></tool-navigation>
     <main class="page">
       <header class="masthead">
         <h1>Kingshot Tools</h1>
@@ -24,7 +26,7 @@
         <h2 id="tools-heading" class="section-heading">Tools</h2>
         <ul class="cards">
           <li>
-            <a class="card" href="kingshot/map/">
+            <a class="card" href="/map/">
               <span class="card-icon" aria-hidden="true">&#128506;&#65039;</span>
               <span class="card-body">
                 <span class="card-title">Player map</span>
@@ -37,7 +39,7 @@
             </a>
           </li>
           <li>
-            <a class="card" href="kingshot/troop-calculator/">
+            <a class="card" href="/calculator/">
               <span class="card-icon" aria-hidden="true">&#9876;&#65039;</span>
               <span class="card-body">
                 <span class="card-title">Bear troop calculator</span>
@@ -50,10 +52,7 @@
             </a>
           </li>
           <li>
-            <a
-              class="card"
-              href="https://roberthewitt.github.io/kingshot-discord-updates/bear/"
-            >
+            <a class="card" href="/bear/">
               <span class="card-icon" aria-hidden="true">&#128059;</span>
               <span class="card-body">
                 <span class="card-title">Bear trap logger</span>
