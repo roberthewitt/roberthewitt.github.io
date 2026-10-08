@@ -8,6 +8,19 @@ const calculatorSource = new URL('https://roberthewitt.github.io/kingshot-bear-t
 const calculatorSourceBase = '/kingshot-bear-troop-calc';
 const calculatorDestinationBase = '/calculator';
 const navigationTag = '<script type="module" src="/assets/tool-navigation.js"></script>';
+const calculatorNavigationStyles = `<style data-tool-navigation-integration>
+body {
+  padding: 0;
+}
+body > .container {
+  margin: 1rem auto;
+}
+@media (max-width: 640px) {
+  body > .container {
+    margin: 0.5rem;
+  }
+}
+</style>`;
 const writes = new Map();
 
 const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -63,6 +76,13 @@ function injectNavigation(html) {
   if (html.includes('/assets/tool-navigation.js')) return html;
   if (!html.includes('</body>')) throw new Error('Cannot inject navigation into HTML without </body>');
   return html.replace('</body>', `  ${navigationTag}\n</body>`);
+}
+
+function injectCalculatorNavigation(html) {
+  if (!html.includes('</head>')) {
+    throw new Error('Cannot inject calculator navigation styles into HTML without </head>');
+  }
+  return injectNavigation(html.replace('</head>', `${calculatorNavigationStyles}</head>`));
 }
 
 async function waitForExpectedMapVersion() {
@@ -204,7 +224,9 @@ async function mirrorCalculator() {
   const rebase = (content) =>
     content.toString().replaceAll(calculatorSourceBase, calculatorDestinationBase);
   for (const [document, content] of documents) {
-    const rebased = document.endsWith('.html') ? injectNavigation(rebase(content)) : rebase(content);
+    const rebased = document.endsWith('.html')
+      ? injectCalculatorNavigation(rebase(content))
+      : rebase(content);
     await writeOutput(`calculator/${document}`, rebased, `calculator ${document}`);
   }
   for (const [assetPath, content] of downloaded) {
