@@ -1,11 +1,14 @@
 name: Deploy Site
 
 # The root site is static, so it only needs rebuilding when this repository
-# changes. The nested Kingshot map is mirrored from the site that
-# roberthewitt/kingshot-discord-updates already publishes.
+# changes. The two nested tools are mirrored from the Pages sites that their
+# own repositories already publish:
 #
-# That repository can notify this one the moment it finishes publishing, by
-# dispatching this workflow with the version it just put live. See the README
+#   kingshot/map/              <- roberthewitt/kingshot-discord-updates
+#   kingshot/troop-calculator/ <- roberthewitt/kingshot-bear-troop-calc
+#
+# Either repository can notify this one the moment it finishes publishing, by
+# dispatching this workflow with the build it just put live. See the README
 # for the snippet and the token it needs. The schedule below stays on as a
 # safety net, because a push-based trigger is silent when it breaks: a revoked
 # or expired token stops the notifications without failing anything, and
@@ -29,9 +32,16 @@ on:
     inputs:
       expected_version:
         description: >-
-          Dataset version to wait for before mirroring, as reported by the
-          source repository's publish job. Leave blank to mirror whatever is
+          Dataset version to wait for before mirroring the map, as reported by
+          the map repository's publish job. Leave blank to mirror whatever is
           currently published.
+        required: false
+        type: string
+      expected_calculator_build:
+        description: >-
+          Next.js build id to wait for before mirroring the troop calculator,
+          as found in that repository's .next/BUILD_ID. Leave blank to mirror
+          whatever is currently published.
         required: false
         type: string
 
@@ -51,6 +61,15 @@ env:
   # `npm run map:build` in roberthewitt/kingshot-discord-updates.
   MAP_SOURCE_URL: https://roberthewitt.github.io/kingshot-discord-updates/
 
+  # The troop calculator's own public Pages site, which is the published
+  # `next build` export from roberthewitt/kingshot-bear-troop-calc.
+  CALC_SOURCE_URL: https://roberthewitt.github.io/kingshot-bear-troop-calc/
+  # The base path that export was built against, and the one it is served
+  # from here. Both are written without a trailing slash because the base
+  # appears in both forms in the bundle.
+  CALC_SOURCE_BASE: /kingshot-bear-troop-calc
+  CALC_DEST_BASE: /kingshot/troop-calculator
+
 jobs:
   build:
     name: Build Site
@@ -59,15 +78,16 @@ jobs:
       - name: Checkout Site Repository
         uses: actions/checkout@v4
 
-      # The map is copied from its published site rather than rebuilt from
-      # source. Its repository is private, so this workflow's GITHUB_TOKEN
-      # cannot check it out. Reading the public bundle instead needs no
-      # credential, and can only ever serve what the source repository itself
-      # chose to publish.
+      # Both tools are copied from their published sites rather than rebuilt
+      # from source. Their repositories are private, so this workflow's
+      # GITHUB_TOKEN cannot check them out. Reading the public bundles instead
+      # needs no credential, and can only ever serve what those repositories
+      # themselves chose to publish.
       #
-      # The bundle is built by vite with `base: './'`, so every reference in
-      # it is relative and keeps resolving once it is served from
-      # /kingshot/map/ instead of the site root.
+      # The map is built by vite with `base: './'`, so every reference in it
+      # is relative and keeps resolving once it is served from /kingshot/map/
+      # instead of the site root. The calculator is not so lucky; see its own
+      # step below.
       - name: Await Published Version
         if: ${{ inputs.expected_version != '' }}
         env:
@@ -161,6 +181,155 @@ jobs:
           dataset_version="$(node -p "require('./${dest}/players.json').version?.label ?? 'unknown'")"
           echo "Mirrored map: ${player_count} players (\`${dataset_version}\`)." | tee -a "$GITHUB_STEP_SUMMARY"
 
+      - name: Await Published Calculator Build
+        if: ${{ inputs.expected_calculator_build != '' }}
+        env:
+          EXPECTED_BUILD: ${{ inputs.expected_calculator_build }}
+        run: |
+          set -euo pipefail
+
+          # Same CDN caching problem as the map above: being told the
+          # calculator has deployed does not mean the edge will serve the new
+          # bundle yet. Next stamps each build with an id, so that is what we
+          # wait for.
+          deadline=$(( $(date +%s) + 900 ))
+
+          while :; do
+            if curl -fsSL -o probe.html "${CALC_SOURCE_URL}"; then
+              # Read from the raw bytes, since the id sits inside JSON that is
+              # itself escaped into the HTML.
+              published="$(grep -oE 'buildId[^A-Za-z0-9_-]+[A-Za-z0-9_-]+' probe.html \
+                | head -n1 | grep -oE '[A-Za-z0-9_-]+$' || true)"
+            else
+              published=''
+            fi
+
+            if [[ "${published}" == "${EXPECTED_BUILD}" ]]; then
+              echo "Published calculator is serving \`${EXPECTED_BUILD}\`." | tee -a "$GITHUB_STEP_SUMMARY"
+              break
+            fi
+
+            if [[ "$(date +%s)" -ge "${deadline}" ]]; then
+              echo "Timed out waiting for ${EXPECTED_BUILD}; the published calculator still reports '${published:-nothing}'" >&2
+              echo "The CDN cache should expire well inside this window, so this suggests the publish did not land." >&2
+              exit 1
+            fi
+
+            echo "Published calculator reports '${published:-nothing}', waiting for ${EXPECTED_BUILD}"
+            sleep 30
+          done
+
+          rm -f probe.html
+
+      - name: Mirror Troop Calculator
+        run: |
+          set -euo pipefail
+
+          dest="_site/kingshot/troop-calculator"
+          mkdir -p "${dest}"
+
+          # The calculator is a Next.js static export built with
+          # `basePath: '/kingshot-bear-troop-calc'`, so unlike the map every
+          # reference in it is an absolute path rooted at that base. Mirroring
+          # it therefore means rewriting the base as well as copying files.
+          for doc in index.html 404.html index.txt; do
+            curl -fsSL --retry 3 --retry-delay 5 -o "${dest}/${doc}" "${CALC_SOURCE_URL}${doc}"
+          done
+
+          if ! grep -q '_next/static' "${dest}/index.html"; then
+            echo "The published calculator has no _next assets, so it was probably an error page" >&2
+            exit 1
+          fi
+
+          # Assets named directly in the documents.
+          grep -ohE "${CALC_SOURCE_BASE}/_next/[A-Za-z0-9/._-]+" \
+            "${dest}/index.html" "${dest}/404.html" "${dest}/index.txt" \
+            | sed "s|^${CALC_SOURCE_BASE}/||" \
+            | sort -u > assets.txt
+
+          # Chunks that webpack only requests at runtime. These are built as
+          # "static/chunks/" + id + "." + hash + ".js" from a table inside the
+          # runtime, so they appear in no document, and a mirror that only
+          # scraped the markup would omit them and break the calculator the
+          # moment a lazy import ran.
+          webpack="$(grep -oE '_next/static/chunks/webpack-[A-Za-z0-9]+\.js' "${dest}/index.html" | head -n1)"
+          if [[ -z "${webpack}" ]]; then
+            echo "Could not find the webpack runtime in the published calculator" >&2
+            exit 1
+          fi
+          mkdir -p "${dest}/$(dirname "${webpack}")"
+          curl -fsSL --retry 3 --retry-delay 5 -o "${dest}/${webpack}" "${CALC_SOURCE_URL}${webpack}"
+
+          node -e '
+            const fs = require("fs");
+            const runtime = fs.readFileSync(process.argv[1], "utf8");
+            const table = runtime.match(/"static\/chunks\/"\+\w+\+"\."\+\(([^)]*)\)/);
+            if (!table) {
+              console.error("The webpack runtime does not expose a lazy chunk table in the shape this mirror understands.");
+              console.error("Next.js may have changed its runtime; the mirror must be rechecked rather than silently shipping a partial copy.");
+              process.exit(1);
+            }
+            const names = [...table[1].matchAll(/(\w+):"([0-9a-f]+)"/g)]
+              .map(([, id, hash]) => `_next/static/chunks/${id}.${hash}.js`);
+            if (names.length === 0) {
+              console.error("Found a lazy chunk table but no chunks in it");
+              process.exit(1);
+            }
+            console.log(names.join("\n"));
+          ' "${dest}/${webpack}" >> assets.txt
+
+          sort -u -o assets.txt assets.txt
+
+          while read -r asset; do
+            mkdir -p "${dest}/$(dirname "${asset}")"
+            curl -fsSL --retry 3 --retry-delay 5 -o "${dest}/${asset}" "${CALC_SOURCE_URL}${asset}"
+          done < assets.txt
+
+          while read -r file; do
+            if [[ ! -s "${dest}/${file}" ]]; then
+              echo "Mirrored ${file} is missing or empty" >&2
+              exit 1
+            fi
+          done < <(cat assets.txt; printf 'index.html\n404.html\nindex.txt\n')
+
+          # Point every absolute reference at the path this site serves the
+          # calculator from. The base appears in the markup, in the webpack
+          # asset prefix and in the router's own copy of it, both with and
+          # without a trailing slash, so it is rewritten everywhere rather
+          # than only in the documents.
+          while read -r file; do
+            case "${file}" in
+              *.html|*.js|*.css|*.txt|*.json|*.map)
+                perl -pi -e "s{\Q${CALC_SOURCE_BASE}\E}{${CALC_DEST_BASE}}g" "${dest}/${file}"
+                ;;
+            esac
+          done < <(cd "${dest}" && find . -type f | sed 's|^\./||')
+
+          if grep -rq "kingshot-bear-troop-calc" "${dest}"; then
+            echo "The mirrored calculator still refers to its original base path" >&2
+            grep -rl "kingshot-bear-troop-calc" "${dest}" >&2
+            exit 1
+          fi
+
+          # Every asset the mirrored markup asks for must exist in the mirror,
+          # or the calculator will 404 at runtime on a path this site does not
+          # host.
+          missing=0
+          while read -r ref; do
+            rel="${ref#${CALC_DEST_BASE}/}"
+            if [[ ! -f "${dest}/${rel}" ]]; then
+              echo "Mirrored markup references ${ref} which was not copied" >&2
+              missing=1
+            fi
+          done < <(grep -rhoE "${CALC_DEST_BASE}/_next/[A-Za-z0-9/._-]+" "${dest}" | sort -u)
+          if [[ "${missing}" -ne 0 ]]; then
+            exit 1
+          fi
+
+          asset_count="$(wc -l < assets.txt | tr -d ' ')"
+          rm assets.txt
+          echo "Mirrored troop calculator: ${asset_count} assets rebased onto \`${CALC_DEST_BASE}/\`." | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Assemble Pages Artifact
         run: |
           set -euo pipefail
@@ -172,7 +341,9 @@ jobs:
             ./ _site/
           touch _site/.nojekyll
 
-          for required in _site/index.html _site/assets/styles.css _site/kingshot/map/index.html; do
+          for required in _site/index.html _site/assets/styles.css \
+            _site/kingshot/map/index.html \
+            _site/kingshot/troop-calculator/index.html; do
             if [[ ! -f "${required}" ]]; then
               echo "Missing ${required} in the assembled artifact" >&2
               exit 1
@@ -186,7 +357,17 @@ jobs:
             exit 1
           fi
 
-          echo "Assembled root page plus the Kingshot map at \`kingshot/map/\`." | tee -a "$GITHUB_STEP_SUMMARY"
+          # The calculator's references are absolute by design, so the check
+          # there is that they were rebased onto the path we serve it from.
+          if grep -oE '(src|href)="/[^"]*"' _site/kingshot/troop-calculator/index.html \
+            | grep -v "\"${CALC_DEST_BASE}/" > stray.txt; then
+            echo "The calculator references absolute paths outside ${CALC_DEST_BASE}/" >&2
+            cat stray.txt >&2
+            exit 1
+          fi
+          rm -f stray.txt
+
+          echo "Assembled root page, the Kingshot map at \`kingshot/map/\` and the troop calculator at \`kingshot/troop-calculator/\`." | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
