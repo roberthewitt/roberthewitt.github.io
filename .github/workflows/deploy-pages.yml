@@ -2,17 +2,38 @@ name: Deploy Site
 
 # The root site is static, so it only needs rebuilding when this repository
 # changes. The nested Kingshot map is mirrored from the site that
-# roberthewitt/kingshot-discord-updates already publishes, on the same daily
-# cadence as that repository's own publish workflow (05:30 UTC), staggered
-# slightly so this run picks up that day's roster rather than the previous
-# one.
+# roberthewitt/kingshot-discord-updates already publishes.
+#
+# That repository can notify this one the moment it finishes publishing, by
+# dispatching this workflow with the version it just put live. See the README
+# for the snippet and the token it needs. The schedule below stays on as a
+# safety net, because a push-based trigger is silent when it breaks: a revoked
+# or expired token stops the notifications without failing anything, and
+# without a periodic run the site would simply stop updating unnoticed.
+#
+# The schedule cannot be chained to the source's nominal 05:30 publish.
+# GitHub defers scheduled runs under load, and that repository's "05:30" job
+# has actually started between 10:32 and 12:30 UTC on recent days. This
+# workflow's own schedule is deferred by the same unpredictable amount, so any
+# single daily slot is as likely to run before that day's publish as after it,
+# and would then mirror the previous day's map for a full day. Polling on a
+# fixed interval sidesteps the ordering question instead of trying to win the
+# race, and bounds staleness to roughly six hours on its own.
 on:
   push:
     branches:
       - main
   schedule:
-    - cron: '45 5 * * *'
+    - cron: '0 */6 * * *'
   workflow_dispatch:
+    inputs:
+      expected_version:
+        description: >-
+          Dataset version to wait for before mirroring, as reported by the
+          source repository's publish job. Leave blank to mirror whatever is
+          currently published.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -40,14 +61,57 @@ jobs:
 
       # The map is copied from its published site rather than rebuilt from
       # source. Its repository is private, so this workflow's GITHUB_TOKEN
-      # cannot check it out, and a cross-repository PAT would add a secret
-      # that silently expires. The published bundle is already public, so
-      # mirroring it needs no credential at all and can only ever serve what
-      # the source repository itself chose to publish.
+      # cannot check it out. Reading the public bundle instead needs no
+      # credential, and can only ever serve what the source repository itself
+      # chose to publish.
       #
       # The bundle is built by vite with `base: './'`, so every reference in
       # it is relative and keeps resolving once it is served from
       # /kingshot/map/ instead of the site root.
+      - name: Await Published Version
+        if: ${{ inputs.expected_version != '' }}
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+        run: |
+          set -euo pipefail
+
+          # GitHub Pages serves through a CDN with `cache-control: max-age=600`,
+          # and that cache honours neither a cache-busting query string nor a
+          # no-cache request header. So being told the source has deployed is
+          # not the same as being able to read the new bundle: for up to ten
+          # minutes the edge can still hand back the previous one. Mirroring
+          # immediately on notification would therefore reliably copy stale
+          # files and then sit on them until the next scheduled run.
+          #
+          # Waiting for the version the source says it published turns that
+          # race into a non-issue, without having to guess a sleep that is
+          # long enough.
+          deadline=$(( $(date +%s) + 900 ))
+
+          while :; do
+            if curl -fsSL -o probe.json "${MAP_SOURCE_URL}players.json"; then
+              published="$(node -p "JSON.parse(require('fs').readFileSync('probe.json','utf8')).version?.label ?? ''")"
+            else
+              published=''
+            fi
+
+            if [[ "${published}" == "${EXPECTED_VERSION}" ]]; then
+              echo "Published map is serving \`${EXPECTED_VERSION}\`." | tee -a "$GITHUB_STEP_SUMMARY"
+              break
+            fi
+
+            if [[ "$(date +%s)" -ge "${deadline}" ]]; then
+              echo "Timed out waiting for ${EXPECTED_VERSION}; the published map still reports '${published:-nothing}'" >&2
+              echo "The CDN cache should expire well inside this window, so this suggests the publish did not land." >&2
+              exit 1
+            fi
+
+            echo "Published map reports '${published:-nothing}', waiting for ${EXPECTED_VERSION}"
+            sleep 30
+          done
+
+          rm -f probe.json
+
       - name: Mirror Kingshot Map
         run: |
           set -euo pipefail
