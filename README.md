@@ -1,207 +1,92 @@
 # roberthewitt.github.io
 
-Personal GitHub Pages site.
+Launch pad and canonical deployment for the Kingshot browser tools.
 
-## URL structure
+## Routes
 
-| Path | What it is |
+| Path | Content |
 | --- | --- |
-| `/` | Static landing page (`index.html` + `assets/styles.css`) served from this repository. |
-| `/kingshot/map/` | The Kingshot player map, mirrored from another repository's published site at deploy time. |
-| `/kingshot/troop-calculator/` | The bear troop calculator, mirrored the same way. |
-| Bear trap logger card | Links directly to the live bear trap logger at [`roberthewitt.github.io/kingshot-discord-updates/bear/`](https://roberthewitt.github.io/kingshot-discord-updates/bear/), rather than being mirrored into this site. |
+| `/` | Launch pad maintained in this repository. |
+| `/map/` | Player map mirrored from `roberthewitt/kingshot-discord-updates`. |
+| `/bear/` | Bear trap logger from the same map/bear deployment. |
+| `/calculator/` | Bear troop calculator mirrored from `roberthewitt/kingshot-bear-troop-calc`. |
 
-## How the tools are sourced
+The former `/kingshot/map/` and `/kingshot/troop-calculator/` routes remain as
+small redirects to their canonical replacements.
 
-Neither tool is stored here, and neither is rebuilt here.
+## Assembly
 
-[`roberthewitt/kingshot-discord-updates`](https://github.com/roberthewitt/kingshot-discord-updates)
-already builds the map with `npm run map:build` and publishes it to its own
-GitHub Pages site. `.github/workflows/deploy-pages.yml` copies that published
-bundle into this site's artifact at `kingshot/map/`.
+`.github/workflows/deploy-pages.yml` runs `scripts/assemble-site.mjs` and uploads
+the fresh `_site/` directory as the Pages artifact. The assembler always removes
+the previous directory first and fails on destination collisions, missing
+required files, invalid datasets, legacy deployment paths, or unresolved local
+HTML references.
 
-[`roberthewitt/kingshot-bear-troop-calc`](https://github.com/roberthewitt/kingshot-bear-troop-calc)
-does the same with `next build`, and the workflow copies its export into
-`kingshot/troop-calculator/`.
+The source repositories are private, so this repository deliberately does not
+check them out or require a cross-repository token. It mirrors only their public
+GitHub Pages artifacts.
 
-Both mirror rather than rebuild because the source repositories are **private**.
-This workflow's `GITHUB_TOKEN` is scoped to this repository, so it cannot check
-them out, and a cross-repository personal access token would add a secret that
-silently expires. The published bundles are already public, so mirroring them
-needs no credential at all and can only ever serve what those repositories
-themselves chose to publish.
+### Map and bear
 
-For the map, the workflow discovers the hashed asset filenames from the
-published `index.html` rather than hardcoding them, fetches `players.json`
-separately because the page requests it at runtime, and fails the build if any
-file is missing or empty, if the dataset has no players, or if the bundle
-contains absolute paths.
+The map and bear logger are two entry points from one Vite build. They share
+hashed files in `assets/`, and their `players.json` and `bear-players.json`
+datasets must represent the same roster. The assembler downloads both pages,
+all assets referenced by either page, and both datasets as one unit. It then:
 
-### The calculator needs its paths rewritten
+- serves the entry points at `/map/` and `/bear/`;
+- keeps the shared hashed bundles in `/assets/`;
+- keeps `bear-players.json` at the root, where the bear bundle expects it;
+- places the exact same `players.json` bytes at the root and under `/map/`,
+  where the relocated map bundle expects them; and
+- verifies that both datasets are nonempty and have equal player counts.
 
-The map nests for free; the calculator does not, and the difference is worth
-knowing if either source changes.
+This preserves the source deployment's internal coupling rather than scraping
+the map in isolation.
 
-The map is built by Vite with `base: './'`, so every reference in it is
-*relative* and keeps resolving wherever it is served from.
+### Calculator
 
-The calculator is a Next.js static export built with
-`basePath: '/kingshot-bear-troop-calc'`, so every reference in it is an
-*absolute* path rooted at that base. Copied as-is it would request its assets
-from the other site entirely. The workflow therefore rewrites that base to
-`/kingshot/troop-calculator` across the HTML, JavaScript and CSS.
+The current public calculator export is built with the absolute base path
+`/kingshot-bear-troop-calc`. The assembler mirrors its documents, referenced
+Next.js assets, and lazy webpack chunks, then rewrites that base to
+`/calculator` across every text asset.
 
-Two details make that rewrite less obvious than it sounds:
+The calculator source now also supports the future direct-build contract
+`BUILD_BASE_PATH=/calculator npm run build`. Until that source change is
+deployed and this repository intentionally migrates to source builds, rebasing
+the public artifact keeps this deployment independent of it.
 
-- **The base appears with and without a trailing slash.** The markup uses
-  `/kingshot-bear-troop-calc/_next/...`, but the hydration payload and the
-  router's own copy of `basePath` hold the bare `/kingshot-bear-troop-calc`.
-  Rewriting only the trailing-slash form leaves the router and the webpack
-  asset prefix pointing at the original site, which still *works* — same
-  origin — while silently coupling this site to the other one.
-- **Some chunks appear in no document.** webpack builds their URLs at runtime
-  from a table inside its own runtime bundle, so a mirror that only scraped
-  the markup would omit them and break the moment a lazy import ran. The
-  workflow parses that table, and fails the build if it cannot find it rather
-  than shipping a partial copy.
+## Shared navigation
 
-After rewriting, the workflow fails the build if any reference to the original
-base survives, or if the markup names an asset that was not copied.
+`assets/tool-navigation.js` is the sole implementation of the Home, Map, Bear,
+and Calculator navigation. It defines an accessible, keyboard-focusable,
+responsive Web Component with encapsulated styles.
 
-Nothing is ever written back to either source repository.
+The root page includes `<tool-navigation>` directly. During assembly, the
+component loader is added to the map, bear, and calculator documents. On those
+pages it inserts the component as a body sibling, outside application mount
+points, so it does not modify framework-owned markup or require an iframe.
 
-## When it rebuilds
+## Deployment triggers and permissions
 
-- On push to `main` (root site changes).
-- Every six hours (`0 */6 * * *`), to pick up a newly published map or calculator.
-- Manually via **Run workflow** (`workflow_dispatch`).
-- On notification from either source repository, if that is wired up (below).
+The workflow runs:
 
-The schedule polls on a fixed interval rather than running once a day timed to
-follow the source's publish. GitHub defers scheduled runs under load, and the
-source's nominal 05:30 UTC job has actually started between 10:32 and 12:30 UTC
-on recent days. This workflow's schedule slips by the same unpredictable amount,
-so a single daily slot is as likely to run before that day's publish as after
-it, and would then serve the previous day's map for a full day. Polling bounds
-staleness to roughly six hours regardless of when the source publishes.
+- on pushes to `main`;
+- every six hours, so source-site changes are picked up even if a dispatch
+  integration stops working; and
+- manually, optionally waiting for a specific map dataset version or calculator
+  build id to become visible through the Pages CDN.
 
-## Optional: refresh as soon as a tool publishes
+Permissions are limited to `contents: read`, `pages: write`, and
+`id-token: write`.
 
-Either source repository can dispatch this workflow the moment it finishes
-publishing, which replaces up-to-six-hours of lag with about a minute. The
-schedule stays on as a safety net either way, because a push-based trigger
-fails silently: if the token below is revoked or expires, the notifications
-simply stop, and nothing goes red to tell you.
+## Local validation
 
-This needs a token, because a workflow's built-in `GITHUB_TOKEN` cannot reach
-another repository. Note the direction: the token lives in the **source**
-repository and only needs permission to start a workflow in **this** one, which
-is public. It never needs access to the private repository's contents, and if
-it lapses the site keeps updating on schedule rather than breaking.
+Build and validate the same artifact uploaded by Actions:
 
-### From the map repository
-
-1. Create a fine-grained personal access token scoped to **only** the
-   `roberthewitt.github.io` repository, with **Actions: Read and write**. That
-   permission allows starting a workflow run and nothing else — notably not
-   pushing code.
-2. Add it to the source repository as a repository secret named
-   `SITE_REFRESH_TOKEN`. The same token can be used in both.
-3. Append this job to that repository's `.github/workflows/publish-player-map.yml`:
-
-   ```yaml
-     notify-site:
-       name: Refresh Nested Site Copy
-       needs: [build, deploy]
-       runs-on: ubuntu-latest
-       steps:
-         - name: Dispatch Site Mirror
-           env:
-             GH_TOKEN: ${{ secrets.SITE_REFRESH_TOKEN }}
-             DATASET_VERSION: ${{ needs.build.outputs.dataset_version }}
-           run: |
-             set -euo pipefail
-
-             # Skip rather than fail when the secret is absent, so publishing
-             # the map never depends on the mirror being configured.
-             if [[ -z "${GH_TOKEN}" ]]; then
-               echo "No SITE_REFRESH_TOKEN configured; skipping the refresh."
-               exit 0
-             fi
-
-             gh workflow run deploy-pages.yml \
-               --repo roberthewitt/roberthewitt.github.io \
-               --ref main \
-               --field "expected_version=${DATASET_VERSION}"
-   ```
-
-`expected_version` matters. GitHub Pages serves through a CDN with
-`cache-control: max-age=600`, and that cache honours neither a cache-busting
-query string nor a `no-cache` request header, so for up to ten minutes after the
-source deploys the edge can still return the *previous* bundle. Being told the
-map has published is therefore not the same as being able to read it. Passing
-the version the source just published makes this workflow wait until the public
-site actually serves it, instead of copying stale files and sitting on them
-until the next scheduled run.
-
-The value is already computed in that workflow as `dataset_version`, so the
-snippet just forwards it.
-
-### From the calculator repository
-
-Same idea, but the thing to wait for is Next's build id rather than a dataset
-version. Append this to `.github/workflows/deploy.yml` in
-`kingshot-bear-troop-calc`, and have its build job expose the id:
-
-```yaml
-  # In the existing `build` job, after the Build step:
-      - name: Record Build Id
-        id: buildid
-        working-directory: ./web
-        run: echo "build_id=$(cat .next/BUILD_ID)" >> "$GITHUB_OUTPUT"
+```sh
+node scripts/assemble-site.mjs
+python3 -m http.server --directory _site 8000
 ```
 
-```yaml
-  notify-site:
-    name: Refresh Nested Site Copy
-    needs: [build, deploy]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Dispatch Site Mirror
-        env:
-          GH_TOKEN: ${{ secrets.SITE_REFRESH_TOKEN }}
-          BUILD_ID: ${{ needs.build.outputs.build_id }}
-        run: |
-          set -euo pipefail
-
-          if [[ -z "${GH_TOKEN}" ]]; then
-            echo "No SITE_REFRESH_TOKEN configured; skipping the refresh."
-            exit 0
-          fi
-
-          gh workflow run deploy-pages.yml \
-            --repo roberthewitt/roberthewitt.github.io \
-            --ref main \
-            --field "expected_calculator_build=${BUILD_ID}"
-```
-
-That needs `build` to declare the output:
-
-```yaml
-  build:
-    outputs:
-      build_id: ${{ steps.buildid.outputs.build_id }}
-```
-
-## Why the bear trap logger isn't mirrored
-
-Unlike the map and the calculator, the landing page's "Bear trap logger" card
-links straight to
-[`roberthewitt.github.io/kingshot-discord-updates/bear/`](https://roberthewitt.github.io/kingshot-discord-updates/bear/)
-instead of being copied into `_site` by `deploy-pages.yml`. That page shares a
-single `assets/` directory with the map at the root of its own Pages site
-(it references `../assets/...`), rather than owning a self-contained bundle
-the way the map does with `base: './'`. Mirroring it would mean also mirroring
-and rewriting that shared asset directory, which the workflow does not do
-today. Linking straight to the source avoids that, at the cost of navigating
-away from this site instead of staying nested under `/kingshot/`.
+Then exercise `/`, `/map/`, `/bear/`, `/calculator/`, and both legacy routes.
+The generated `_site/` directory is intentionally not committed.
