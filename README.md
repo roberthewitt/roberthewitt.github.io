@@ -38,10 +38,16 @@ Nothing is ever written back to `kingshot-discord-updates`.
 ## When it rebuilds
 
 - On push to `main` (root site changes).
-- Daily at 05:45 UTC (`45 5 * * *`), just after the source repository's own
-  `Publish Player Map` schedule at 05:30 UTC, so the mirror picks up that day's
-  roster rather than the previous one.
+- Every six hours (`0 */6 * * *`), to pick up a newly published map.
 - Manually via **Run workflow** (`workflow_dispatch`).
+
+It polls on a fixed interval rather than running once a day timed to follow the
+source's publish. GitHub defers scheduled runs under load, and the source's
+nominal 05:30 UTC job has actually started between 10:32 and 12:30 UTC on recent
+days. This workflow's schedule slips by the same unpredictable amount, so a
+single daily slot is as likely to run before that day's publish as after it, and
+would then serve the previous day's map for a full day. Polling bounds staleness
+to roughly six hours regardless of when the source actually publishes.
 
 ## Adding `/kingshot/bear/`
 
