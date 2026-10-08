@@ -1,0 +1,112 @@
+name: Deploy Site
+
+# The root site is static, so it only needs rebuilding when this repository
+# changes. The nested Kingshot map is pulled from
+# roberthewitt/kingshot-discord-updates and rebuilt on the same daily cadence
+# as that repository's own publish workflow (05:30 UTC), staggered slightly so
+# the two do not race for the same roster commit.
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '45 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Pages keeps a single live deployment. Let a newer run supersede one that is
+# still queued, but never cancel a deployment already in flight.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Site
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Site Repository
+        uses: actions/checkout@v4
+        with:
+          path: site
+
+      # Read-only checkout of the public source repository. Nothing is written
+      # back to it; it is only used to produce the map bundle.
+      - name: Checkout Kingshot Map Source
+        uses: actions/checkout@v4
+        with:
+          repository: roberthewitt/kingshot-discord-updates
+          path: kingshot-source
+
+      - name: Setup Node.js Environment
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: kingshot-source/package-lock.json
+
+      - name: Install Map Dependencies
+        working-directory: kingshot-source
+        run: npm ci
+
+      # `premap:build` regenerates web/public/players.json from the checked-in
+      # roster before vite bundles the site. No API key is required.
+      - name: Build Kingshot Map
+        working-directory: kingshot-source
+        run: npm run map:build
+
+      # The map is built with vite `base: './'`, so its asset references are
+      # relative and keep working once the bundle is moved under /kingshot/map/.
+      - name: Assemble Pages Artifact
+        run: |
+          set -euo pipefail
+
+          if [[ ! -f kingshot-source/dist/player-map/index.html ]]; then
+            echo "Expected the map build to produce dist/player-map/index.html" >&2
+            exit 1
+          fi
+
+          mkdir -p _site
+          rsync -a --exclude '.git' --exclude '.github' site/ _site/
+          mkdir -p _site/kingshot/map
+          rsync -a kingshot-source/dist/player-map/ _site/kingshot/map/
+          touch _site/.nojekyll
+
+          for required in _site/index.html _site/assets/styles.css _site/kingshot/map/index.html; do
+            if [[ ! -f "${required}" ]]; then
+              echo "Missing ${required} in the assembled artifact" >&2
+              exit 1
+            fi
+          done
+
+          if grep -q 'src="/' _site/kingshot/map/index.html; then
+            echo "The map bundle references absolute asset paths and will break under /kingshot/map/" >&2
+            exit 1
+          fi
+
+          echo "**Assembled site**" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "Root page plus the Kingshot map at \`kingshot/map/\`." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    name: Deploy Site
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
