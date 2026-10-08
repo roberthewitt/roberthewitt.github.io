@@ -7,28 +7,40 @@ Personal GitHub Pages site.
 | Path | What it is |
 | --- | --- |
 | `/` | Static landing page (`index.html` + `assets/styles.css`) served from this repository. |
-| `/kingshot/map/` | The Kingshot player map, built from another repository at deploy time. |
+| `/kingshot/map/` | The Kingshot player map, mirrored from another repository's published site at deploy time. |
 | `/kingshot/bear/` | Reserved for a future bear trap damage input tool. Not published yet, so the landing page marks it "Coming soon" rather than linking to it. |
 
 ## How the map is sourced
 
-The map is **not** stored here. `.github/workflows/deploy-pages.yml` checks out the
-public repository [`roberthewitt/kingshot-discord-updates`](https://github.com/roberthewitt/kingshot-discord-updates)
-read-only, installs its Node 20 dependencies with `npm ci`, and runs its existing
-`npm run map:build`. That script regenerates `web/public/players.json` from the
-checked-in roster and bundles the site into `dist/player-map`, which the workflow
-copies into the deployed artifact at `kingshot/map/`.
+The map is **not** stored here, and it is not rebuilt here either.
 
-The map's Vite config uses `base: './'`, so its asset references are relative and
-keep working at the nested path. The workflow asserts this before uploading.
+[`roberthewitt/kingshot-discord-updates`](https://github.com/roberthewitt/kingshot-discord-updates)
+already builds the map with `npm run map:build` and publishes it to its own
+GitHub Pages site. `.github/workflows/deploy-pages.yml` copies that published
+bundle into this site's artifact at `kingshot/map/`.
+
+It mirrors rather than rebuilds because the source repository is **private**.
+This workflow's `GITHUB_TOKEN` is scoped to this repository, so it cannot check
+the source out, and a cross-repository personal access token would add a secret
+that silently expires. The published bundle is already public, so mirroring it
+needs no credential at all and can only ever serve what the source repository
+itself chose to publish.
+
+The bundle is built by Vite with `base: './'`, so every reference in it is
+relative and keeps resolving from the nested path. The workflow discovers the
+hashed asset filenames from the published `index.html` rather than hardcoding
+them, fetches `players.json` separately because the page requests it at runtime,
+and then fails the build if any file is missing or empty, if the dataset has no
+players, or if the bundle contains absolute paths.
 
 Nothing is ever written back to `kingshot-discord-updates`.
 
 ## When it rebuilds
 
 - On push to `main` (root site changes).
-- Daily at 05:30 UTC-ish (`45 5 * * *`), just after the source repository's own
-  `Publish Player Map` schedule, so the map picks up that day's roster.
+- Daily at 05:45 UTC (`45 5 * * *`), just after the source repository's own
+  `Publish Player Map` schedule at 05:30 UTC, so the mirror picks up that day's
+  roster rather than the previous one.
 - Manually via **Run workflow** (`workflow_dispatch`).
 
 ## Adding `/kingshot/bear/`
