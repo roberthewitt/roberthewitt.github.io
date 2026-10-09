@@ -33,17 +33,24 @@ class ToolNavigation extends HTMLElement {
         box-sizing: border-box;
         display: flex;
         align-items: center;
-        justify-content: center;
+        justify-content: flex-start;
         width: 100%;
-        padding: 0.65rem 1rem;
+        padding: 0.65rem 0.5rem;
         background: #111827;
         border-bottom: 1px solid #374151;
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        scroll-padding-inline: 0.4rem;
+        scrollbar-width: none;
+      }
+      nav::-webkit-scrollbar {
+        display: none;
       }
       ul {
         display: flex;
-        flex-wrap: wrap;
-        justify-content: center;
-        gap: 0.25rem;
+        flex-wrap: nowrap;
+        justify-content: flex-start;
+        gap: 0.125rem;
         margin: 0;
         padding: 0;
         list-style: none;
@@ -67,20 +74,6 @@ class ToolNavigation extends HTMLElement {
       a:focus-visible {
         outline: 3px solid #fbbf24;
         outline-offset: 2px;
-      }
-      @media (max-width: 32rem) {
-        nav {
-          padding-inline: 0.5rem;
-        }
-        ul {
-          width: 100%;
-        }
-        li {
-          flex: 1 1 40%;
-        }
-        a {
-          text-align: center;
-        }
       }
     `;
 

@@ -61,6 +61,18 @@ the public artifact keeps this deployment independent of it.
 and Calculator navigation. It defines an accessible, keyboard-focusable,
 responsive Web Component with encapsulated styles.
 
+Its links are anchored to a fixed left offset rather than centred. Centring the
+links against the viewport moved every link by half the scrollbar width, so the
+bar visibly jumped between routes that scroll (`/`, `/calculator/`) and routes
+that are viewport-locked (`/map/`, `/bear/`). `scrollbar-gutter: stable` was
+rejected because it reserves a permanent gutter and leaves a dead strip beside
+the full-bleed bar on the viewport-locked pages. Left-anchoring keeps the bar
+full-bleed and the link positions identical on every route in both states.
+
+The links stay on one row at every width, including 320px with a classic
+scrollbar, so there is no viewport-dependent wrapping. `overflow-x` on the bar
+is only a safety valve for unexpectedly wide labels.
+
 The root page includes `<tool-navigation>` directly. During assembly, the
 component loader is added to the map, bear, and calculator documents. On those
 pages it inserts the component as a body sibling, outside application mount
