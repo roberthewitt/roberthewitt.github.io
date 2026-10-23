@@ -132,23 +132,39 @@ async function copyLaunchPad() {
 function sourceArtifactPath(url) {
   const rootPath = mapSource.pathname;
   if (url.origin !== mapSource.origin || !url.pathname.startsWith(rootPath)) {
-    throw new Error(`Map/bear artifact references unexpected URL ${url}`);
+    throw new Error(`Kingshot artifact references unexpected URL ${url}`);
   }
   return decodeURIComponent(url.pathname.slice(rootPath.length));
 }
 
-async function mirrorMapAndBear() {
-  const [mapHtmlRaw, bearHtmlRaw, players, bearPlayers] = await Promise.all([
+function missingPlannerArtifact(description) {
+  return (error) => {
+    throw new Error(
+      `Unable to mirror the ${description}: ${error.message}. Publish the KvK planner from ` +
+        'roberthewitt/kingshot-discord-updates before deploying this site.',
+    );
+  };
+}
+
+async function mirrorKingshotPages() {
+  // The map, bear logger, and KvK planner are entry points of a single Vite
+  // build published as one Pages artifact, so they are mirrored together. A
+  // missing KvK route means the source deployment predates the planner, not
+  // that the planner is optional here.
+  const [mapHtmlRaw, bearHtmlRaw, kvkHtmlRaw, players, bearPlayers, kvkPlayers] = await Promise.all([
     fetchText(mapSource),
     fetchText(new URL('bear/', mapSource)),
+    fetchText(new URL('kvk/', mapSource)).catch(missingPlannerArtifact('KvK planner')),
     fetchBuffer(new URL('players.json', mapSource)),
     fetchBuffer(new URL('bear-players.json', mapSource)),
+    fetchBuffer(new URL('kvk-players.json', mapSource)).catch(missingPlannerArtifact('KvK roster')),
   ]);
 
   const artifactAssets = new Map();
   for (const [html, pageUrl] of [
     [mapHtmlRaw, mapSource],
     [bearHtmlRaw, new URL('bear/', mapSource)],
+    [kvkHtmlRaw, new URL('kvk/', mapSource)],
   ]) {
     for (const reference of localReferences(html)) {
       const url = new URL(reference, pageUrl);
@@ -157,34 +173,49 @@ async function mirrorMapAndBear() {
       if (artifactPath.startsWith('assets/')) artifactAssets.set(artifactPath, url);
     }
   }
-  if (artifactAssets.size < 4) {
-    throw new Error(`Expected complete map and bear assets, found only ${artifactAssets.size}`);
+  if (artifactAssets.size < 6) {
+    throw new Error(
+      `Expected complete map, bear, and KvK assets, found only ${artifactAssets.size}`,
+    );
   }
 
   const mapHtml = injectNavigation(mapHtmlRaw.replaceAll('./assets/', '../assets/'));
   const bearHtml = injectNavigation(bearHtmlRaw.replace('href="../"', 'href="/map/"'));
+  const kvkHtml = injectNavigation(kvkHtmlRaw.replace('href="../"', 'href="/map/"'));
   await writeOutput('map/index.html', mapHtml, 'map HTML');
   await writeOutput('bear/index.html', bearHtml, 'bear HTML');
+  await writeOutput('kvk/index.html', kvkHtml, 'KvK HTML');
   await writeOutput('players.json', players, 'map dataset');
   await writeOutput('map/players.json', players, 'map runtime dataset');
   await writeOutput('bear-players.json', bearPlayers, 'bear dataset');
+  await writeOutput('kvk-players.json', kvkPlayers, 'KvK dataset');
 
   await Promise.all(
     [...artifactAssets].map(async ([artifactPath, url]) => {
-      await writeOutput(artifactPath, await fetchBuffer(url), `map/bear asset ${url}`);
+      await writeOutput(artifactPath, await fetchBuffer(url), `Kingshot asset ${url}`);
     }),
   );
 
   const mapDataset = JSON.parse(players);
   const bearDataset = JSON.parse(bearPlayers);
+  const kvkDataset = JSON.parse(kvkPlayers);
   if (!Array.isArray(mapDataset.players) || mapDataset.players.length === 0) {
     throw new Error('Map dataset contains no players');
   }
   if (!Array.isArray(bearDataset.players) || bearDataset.players.length !== mapDataset.players.length) {
     throw new Error('Map and bear datasets have inconsistent player counts');
   }
+  // The planner pool is only the TG7/TG8 subset of the kingdom, so it is
+  // deliberately smaller than the roster rather than equal to it.
+  if (!Array.isArray(kvkDataset.players) || kvkDataset.players.length === 0) {
+    throw new Error('KvK dataset contains no rally candidates');
+  }
+  if (kvkDataset.players.length > mapDataset.players.length) {
+    throw new Error('KvK dataset has more rally candidates than the roster has players');
+  }
   console.log(
-    `Mirrored map and bear: ${mapDataset.players.length} players, ${artifactAssets.size} shared assets`,
+    `Mirrored map, bear, and KvK: ${mapDataset.players.length} players, ` +
+      `${kvkDataset.players.length} rally candidates, ${artifactAssets.size} shared assets`,
   );
 }
 
@@ -285,6 +316,8 @@ async function validateOutput() {
     'map/players.json',
     'bear/index.html',
     'bear-players.json',
+    'kvk/index.html',
+    'kvk-players.json',
     'calculator/index.html',
     'calculator/404.html',
     'kingshot/map/index.html',
@@ -351,7 +384,7 @@ await rm(outputRoot, { recursive: true, force: true });
 await mkdir(outputRoot, { recursive: true });
 await Promise.all([waitForExpectedMapVersion(), waitForExpectedCalculatorBuild()]);
 await copyLaunchPad();
-await mirrorMapAndBear();
+await mirrorKingshotPages();
 await mirrorCalculator();
 await addCompatibilityRedirects();
 await validateOutput();

@@ -2,12 +2,14 @@ const links = [
   ['Home', '/'],
   ['Map', '/map/'],
   ['Bear', '/bear/'],
+  ['KvK', '/kvk/'],
   ['Calculator', '/calculator/'],
 ];
 
 const canonicalPath = (path) => {
   if (path.startsWith('/map/')) return '/map/';
   if (path.startsWith('/bear/')) return '/bear/';
+  if (path.startsWith('/kvk/')) return '/kvk/';
   if (path.startsWith('/calculator/')) return '/calculator/';
   return '/';
 };
