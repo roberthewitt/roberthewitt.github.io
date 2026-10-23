@@ -9,6 +9,7 @@ Launch pad and canonical deployment for the Kingshot browser tools.
 | `/` | Launch pad maintained in this repository. |
 | `/map/` | Player map mirrored from `roberthewitt/kingshot-discord-updates`. |
 | `/bear/` | Bear trap logger from the same map/bear deployment. |
+| `/kvk/` | KvK rally planner from the same Kingshot Pages deployment. |
 | `/calculator/` | Bear troop calculator mirrored from `roberthewitt/kingshot-bear-troop-calc`. |
 
 The former `/kingshot/map/` and `/kingshot/troop-calculator/` routes remain as
@@ -26,22 +27,29 @@ The source repositories are private, so this repository deliberately does not
 check them out or require a cross-repository token. It mirrors only their public
 GitHub Pages artifacts.
 
-### Map and bear
+### Map, bear, and KvK
 
-The map and bear logger are two entry points from one Vite build. They share
-hashed files in `assets/`, and their `players.json` and `bear-players.json`
-datasets must represent the same roster. The assembler downloads both pages,
-all assets referenced by either page, and both datasets as one unit. It then:
+The map, bear logger, and KvK rally planner are three entry points from one
+Vite build. They share hashed files in `assets/`, and their `players.json` and
+`bear-players.json` datasets must represent the same roster. The assembler
+downloads all three pages, every asset referenced by any of them, and all three
+datasets as one unit. It then:
 
-- serves the entry points at `/map/` and `/bear/`;
+- serves the entry points at `/map/`, `/bear/`, and `/kvk/`;
 - keeps the shared hashed bundles in `/assets/`;
-- keeps `bear-players.json` at the root, where the bear bundle expects it;
+- keeps `bear-players.json` and `kvk-players.json` at the root, where the bear
+  and planner bundles expect them;
 - places the exact same `players.json` bytes at the root and under `/map/`,
   where the relocated map bundle expects them; and
-- verifies that both datasets are nonempty and have equal player counts.
+- verifies that the map and bear datasets are nonempty and have equal player
+  counts, and that the planner roster is nonempty and no larger than the full
+  roster. The planner pool is only the TG7/TG8 subset, so it is deliberately
+  smaller rather than equal.
 
 This preserves the source deployment's internal coupling rather than scraping
-the map in isolation.
+the map in isolation. Because all three pages ship in a single artifact, a
+missing `/kvk/` route means the source deployment predates the planner; the
+assembler fails with that instruction rather than publishing a dead card.
 
 ### Calculator
 
@@ -58,7 +66,7 @@ the public artifact keeps this deployment independent of it.
 ## Shared navigation
 
 `assets/tool-navigation.js` is the sole implementation of the Home, Map, Bear,
-and Calculator navigation. It defines an accessible, keyboard-focusable,
+KvK, and Calculator navigation. It defines an accessible, keyboard-focusable,
 responsive Web Component with encapsulated styles.
 
 Its links are anchored to a fixed left offset rather than centred. Centring the
@@ -74,9 +82,10 @@ scrollbar, so there is no viewport-dependent wrapping. `overflow-x` on the bar
 is only a safety valve for unexpectedly wide labels.
 
 The root page includes `<tool-navigation>` directly. During assembly, the
-component loader is added to the map, bear, and calculator documents. On those
-pages it inserts the component as a body sibling, outside application mount
-points, so it does not modify framework-owned markup or require an iframe.
+component loader is added to the map, bear, KvK, and calculator documents. On
+those pages it inserts the component as a body sibling, outside application
+mount points, so it does not modify framework-owned markup or require an
+iframe.
 
 ## Deployment triggers and permissions
 
@@ -100,5 +109,6 @@ node scripts/assemble-site.mjs
 python3 -m http.server --directory _site 8000
 ```
 
-Then exercise `/`, `/map/`, `/bear/`, `/calculator/`, and both legacy routes.
+Then exercise `/`, `/map/`, `/bear/`, `/kvk/`, `/calculator/`, and both legacy
+routes.
 The generated `_site/` directory is intentionally not committed.
